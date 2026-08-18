@@ -26,6 +26,10 @@ yarn lint:fix
 # Run all tests
 yarn test
 
+# Run a single test file / a single test by name (root vitest projects config)
+yarn vitest run packages/loot-core/src/shared/months.test.ts
+yarn vitest run -t 'monthUtils'
+
 # Start development server (browser)
 yarn start
 
@@ -34,6 +38,21 @@ yarn start:server-dev
 
 # Start desktop app development
 yarn start:desktop
+```
+
+Other root scripts worth knowing:
+
+```bash
+yarn build                      # lage build across all workspaces
+yarn build:cli                  # @actual-app/cli
+yarn build:mobile               # mobile-client (Capacitor)
+yarn start:ios / start:android  # build:browser, then Capacitor live-reload
+yarn start:storybook            # component-library Storybook
+yarn knip                       # unused files/exports/dependencies
+yarn constraints                # Yarn workspace constraints (yarn.config.cjs)
+yarn check:tsconfig-references  # project references match the workspace graph
+yarn sync:tsconfig-references   # ...and rewrite them when they don't
+yarn generate:release-notes     # bin/release-note-generator.mts
 ```
 
 ### Important Rules
@@ -46,6 +65,32 @@ yarn start:desktop
 
 Every pull request title must be prefixed with `[AI]` — you have to apply it
 yourself. See [PR and Commit Rules](.github/agents/pr-and-commit-rules.md).
+
+### What the agent hooks block
+
+`scripts/agent-hooks/git-guard.sh` runs before every shell command and exits
+non-zero — the call never runs — on any of these. Knowing them up front saves a
+round trip:
+
+| Blocked                                    | Do this instead                                |
+| ------------------------------------------ | ---------------------------------------------- |
+| A commit message not starting with `[AI]`  | Prefix the subject, same as PR titles          |
+| `yarn` after `cd packages/…`               | `yarn workspace <name> <cmd>` from the root    |
+| `gh issue create`                          | Give the user the title and body; they file it |
+| `--no-verify`, `--no-gpg-sign`             | Fix what the hook is complaining about         |
+| `git config` writes (reads are fine)       | Leave repo config alone                        |
+| Force push, or any push to `main`/`master` | Push the feature branch                        |
+
+Other hooks: new files written with `@ts-strict-ignore` are rejected, edited
+files are auto-formatted, and GitHub comments/reviews are checked for the 🤖
+prefix. All of them need `jq` on `PATH`.
+
+### Repo-local skills
+
+`.claude/skills/` holds skills for the workflows that have project-specific
+rules — `committing-actual-changes`, `review-actual-pr`, `running-vrts`,
+`writing-actual-docs`, `writing-release-notes`. Use them instead of improvising;
+`.agents/skills/` mirrors them by symlink for Codex-based harnesses.
 
 ### Task Orchestration with Lage
 
@@ -170,13 +215,22 @@ Service for handling plugins/extensions.
 
 #### 9. **eslint-plugin-actual** (`packages/eslint-plugin-actual/`)
 
-Custom ESLint rules specific to Actual.
+Custom lint rules specific to Actual. Despite the package name they are loaded
+by **oxlint** (see the `actual/*` entries in [`.oxlintrc.json`](.oxlintrc.json),
+which also holds the per-directory overrides that turn some of them off):
 
+- `enforce-boundaries`: No tsconfig paths, no Vite `resolve.alias`, no backtracked imports (`../../`)
+- `prefer-subpath-imports`: Prefer subpath imports (`#path/to/module`) over `../path/to/module`
+- `no-extraneous-dependencies`: Don't import packages missing from the workspace's `package.json`
 - `no-untranslated-strings`: Enforces i18n usage
-- `prefer-trans-over-t`: Prefers Trans component over t() function
+- `prefer-trans-over-t`: Prefers `<Trans>` over `t()` for simple JSX text
 - `prefer-logger-over-console`: Enforces using logger instead of console in `packages/loot-core/`
-- `typography`: Typography rules
-- `prefer-if-statement`: Prefers explicit if statements
+- `no-react-default-import`: No `React.*` — use named imports
+- `no-anchor-tag`: Use `<Link>` instead of `<a>`
+- `no-enum`: No TypeScript `enum` — use objects or maps
+- `prefer-if-statement`: No logical/ternary expressions at statement level
+- `object-shorthand-properties`: Property shorthand in object literals
+- `prefer-const`, `typography` (curly quotes in user-visible locations)
 
 #### 10. **docs** (`packages/docs/`)
 
@@ -190,6 +244,32 @@ Documentation website built with Docusaurus.
   yarn workspace docs build
   yarn start:docs  # From root
   ```
+
+#### 11. **cli** (`packages/cli/` - aliased as `@actual-app/cli`)
+
+Terminal client (`actual` / `actual-cli`) built on `@actual-app/api`.
+
+- Connects to a running sync server — it does not open local budget files
+- Configured via `ACTUAL_SERVER_URL` / `ACTUAL_PASSWORD` / `ACTUAL_SYNC_ID`
+- Uses subpath imports (`#commands/*`, `#config`, …) rather than relative paths
+- See `packages/cli/README.md`; build with `yarn build:cli`
+
+#### 12. **mobile-client** (`packages/mobile-client/`)
+
+Capacitor wrapper that ships the `@actual-app/web` build as an iOS/Android app.
+
+- `android/` and `ios/` are native projects; `capacitor.config.ts` is the entry point
+- Requires Xcode / Android SDK, so it does not build in a plain checkout
+- Commands: `yarn start:ios`, `yarn start:android`, `yarn build:mobile`
+
+#### 13. **ci-actions** (`packages/ci-actions/` - aliased as `@actual-app/ci-actions`)
+
+Scripts the GitHub workflows call: migration checks, release-note check and
+generation, bundle-stats PR comments, next-version resolution.
+
+#### 14. **vite-plugin-peggy** (`packages/vite-plugin-peggy/`)
+
+In-repo Vite plugin compiling `.pegjs`/`.peggy` grammars into ES modules.
 
 ## Development Workflow
 
@@ -216,6 +296,22 @@ yarn test:debug
 # Run tests for a specific package
 yarn workspace @actual-app/core run test
 ```
+
+For a single file or test, bypass lage and use the root `vitest.config.ts` — it
+declares every package's vitest config as a project, so paths resolve from the
+repo root:
+
+```bash
+yarn vitest run packages/loot-core/src/shared/months.test.ts
+yarn vitest run -t 'monthUtils'          # filter by test name
+yarn vitest run --project loot-core-web  # one project only
+```
+
+`loot-core` runs its suite twice, once per platform, selected by the `ENV`
+variable: `test:node` (`ENV=node`) and `test:web` (`ENV=web`, using
+`vitest.web.config.ts`) — `yarn workspace @actual-app/core run test` runs both.
+`component-library` is web-only. Reach for the package script when a test
+depends on those env vars.
 
 **E2E Tests (Playwright)**
 
@@ -536,7 +632,7 @@ When performing code reviews (especially for LLM agents): **see [CODE_REVIEW_GUI
 - **Bundle Size**: Check with rollup-plugin-visualizer
 - **Type Checking**: Uses incremental compilation
 - **Testing**: Tests run in parallel by default
-- **Linting**: ESLint caches results for faster subsequent runs
+- **Linting**: oxlint/oxfmt are Rust-based and run without a cache
 
 ## Workspace Commands Reference
 
@@ -556,8 +652,8 @@ yarn install:server
 
 ## Environment Requirements
 
-- **Node.js**: >=22
-- **Yarn**: ^4.9.1 (managed by packageManager field)
+- **Node.js**: >=22.18.0 (`.nvmrc` pins `v24.18.1`)
+- **Yarn**: `^4.9.1` per `engines`; `packageManager` pins the exact version
 - **Browser Targets**: Electron >= 35.0, modern browsers (see browserslist)
 
 ## Migration Notes
